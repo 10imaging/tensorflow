@@ -1,4 +1,4 @@
-/* Copyright 2015 Google Inc. All Rights Reserved.
+/* Copyright 2015 The TensorFlow Authors. All Rights Reserved.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -12,19 +12,18 @@ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 See the License for the specific language governing permissions and
 limitations under the License.
 ==============================================================================*/
+
 module TF.Backend {
-  // TODO(cassandrax): Remove this interface.
   export interface RunEnumeration {
     histograms: string[];
     compressedHistogramTuples: string[];
     scalars: string[];
     images: string[];
+    audio: string[];
     graph: boolean;
     run_metadata: string[];
   }
 
-
-  // TODO(cassandrax): Remove this interface.
   export interface RunsResponse { [runName: string]: RunEnumeration; }
 
   export type RunToTag = {[run: string]: string[]};
@@ -48,9 +47,13 @@ module TF.Backend {
     bucketCounts: number[];
   }
 
-  export interface HistogramBin { x: number, dx: number, y: number }
+  export interface HistogramBin {
+    x: number;
+    dx: number;
+    y: number;
+  }
   export type HistogramSeriesDatum = HistogramSeries & Datum;
-  export interface HistogramSeries { bins: HistogramBin[] }
+  export interface HistogramSeries { bins: HistogramBin[]; }
 
   export type ImageDatum = Datum & Image;
   export interface Image {
@@ -59,9 +62,13 @@ module TF.Backend {
     url: string;
   }
 
-
+  export type AudioDatum = Datum & Audio;
+  export interface Audio {
+    content_type: string;
+    url: string;
+  }
   export var TYPES = [
-    'scalar', 'histogram', 'compressedHistogram', 'graph', 'image',
+    'scalar', 'histogram', 'compressedHistogram', 'graph', 'image', 'audio',
     'runMetadata'
   ];
   /**
@@ -90,8 +97,6 @@ module TF.Backend {
 
     /**
      * Returns a listing of all the available data in the TensorBoard backend.
-     * Will be deprecated in the future, in favor of
-     * per-data-type methods.
      */
     public runs(): Promise<RunsResponse> {
       return this.requestManager.request(this.router.runs());
@@ -99,8 +104,6 @@ module TF.Backend {
 
     /**
      * Return a promise showing the Run-to-Tag mapping for scalar data.
-     * TODO(cassandrax): Replace this with the direct route, when
-     * available.
      */
     public scalarRuns(): Promise<RunToTag> {
       return this.runs().then((x) => _.mapValues(x, 'scalars'));
@@ -108,8 +111,6 @@ module TF.Backend {
 
     /**
      * Return a promise showing the Run-to-Tag mapping for histogram data.
-     * TODO(cassandrax): Replace this with the direct route, when
-     * available.
      */
     public histogramRuns(): Promise<RunToTag> {
       return this.runs().then((x) => _.mapValues(x, 'histograms'));
@@ -117,18 +118,21 @@ module TF.Backend {
 
     /**
      * Return a promise showing the Run-to-Tag mapping for image data.
-     * TODO(cassandrax): Replace this with the direct route, when
-     * available.
      */
     public imageRuns(): Promise<RunToTag> {
       return this.runs().then((x) => _.mapValues(x, 'images'));
     }
 
     /**
+     * Return a promise showing the Run-to-Tag mapping for audio data.
+     */
+    public audioRuns(): Promise<RunToTag> {
+      return this.runs().then((x) => _.mapValues(x, 'audio'));
+    }
+
+    /**
      * Return a promise showing the Run-to-Tag mapping for compressedHistogram
      * data.
-     * TODO(cassandrax): Replace this with the direct route, when
-     * available.
      */
     public compressedHistogramRuns(): Promise<RunToTag> {
       return this.runs().then((x) => _.mapValues(x, 'compressedHistograms'));
@@ -136,8 +140,6 @@ module TF.Backend {
 
     /**
      * Return a promise showing list of runs that contain graphs.
-     * TODO(cassandrax): Replace this with the direct route, when
-     * available.
      */
     public graphRuns(): Promise<string[]> {
       return this.runs().then(
@@ -146,8 +148,6 @@ module TF.Backend {
 
     /**
      * Return a promise showing the Run-to-Tag mapping for run_metadata objects.
-     * TODO(cassandrax): Replace this with the direct route, when
-     * available.
      */
     public runMetadataRuns(): Promise<RunToTag> {
       return this.runs().then((x) => _.mapValues(x, 'run_metadata'));
@@ -203,6 +203,16 @@ module TF.Backend {
     }
 
     /**
+     * Return a promise containing AudioDatums for given run and tag.
+     */
+    public audio(tag: string, run: string): Promise<Array<AudioDatum>> {
+      let url = this.router.audio(tag, run);
+      let p: Promise<AudioMetadata[]>;
+      p = this.requestManager.request(url);
+      return p.then(map(this.createAudio.bind(this)));
+    }
+
+    /**
      * Returns a promise to load the string RunMetadata for given run/tag.
      */
     public runMetadata(tag: string, run: string): Promise<string> {
@@ -230,6 +240,15 @@ module TF.Backend {
         wall_time: timeToDate(x.wall_time),
         step: x.step,
         url: this.router.individualImage(x.query),
+      };
+    }
+
+    private createAudio(x: AudioMetadata): Audio&Datum {
+      return {
+        content_type: x.content_type,
+        wall_time: timeToDate(x.wall_time),
+        step: x.step,
+        url: this.router.individualAudio(x.query),
       };
     }
   }
@@ -296,14 +315,15 @@ module TF.Backend {
    * to visualize. When visualizing histograms, having the left edge and width
    * makes things quite a bit easier.
    *
-   * @param {histogram} Histogram - A histogram from tensorboard backend.
-   * @return {HistogramBin[]} - Each bin has an x (left edge), a dx (width), and a y (count).
+   * @param histogram A histogram from tensorboard backend.
+   * @return A histogram bin. Each bin has an x (left edge), a dx (width),
+   *     and a y (count).
    *
    * If given rightedges are inclusive, then these left edges (x) are exclusive.
    */
   export function convertBins(histogram: Histogram) {
     if (histogram.bucketRightEdges.length !== histogram.bucketCounts.length) {
-      throw(new Error('Edges and counts are of different lengths.'))
+      throw(new Error('Edges and counts are of different lengths.'));
     }
 
     var previousRightEdge = histogram.min;
@@ -325,11 +345,11 @@ module TF.Backend {
   }
 
   /**
-    * The following interfaces (TupleData, HistogramTuple,
-    * CompressedHistogramTuple, and ImageMetadata) describe how the data is sent
-    * over from the backend; the numbers are wall_time then step
-    */
-  type TupleData<T> = [number, number, T];
+   * The following interfaces (TupleData, HistogramTuple,
+   * CompressedHistogramTuple, ImageMetadata, and AudioMetadata) describe how
+   * the data is sent over from the backend.
+   */
+  type TupleData<T> = [number, number, T];  // wall_time, step
 
   // Min, Max, nItems, Sum, Sum_Squares, right edges of buckets, nItems in
   // buckets
@@ -339,6 +359,12 @@ module TF.Backend {
   interface ImageMetadata {
     width: number;
     height: number;
+    wall_time: number;
+    step: number;
+    query: string;
+  }
+  interface AudioMetadata {
+    content_type: string;
     wall_time: number;
     step: number;
     query: string;
